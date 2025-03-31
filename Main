@@ -1,0 +1,225 @@
+import os
+import json
+import smtplib
+import random
+import webbrowser
+import speech_recognition as sr
+import tkinter as tk
+from tkinter import messagebox, simpledialog
+from tkinter import ttk
+from PIL import Image, ImageTk
+import hashlib
+import usb.core
+import usb.util
+
+# User data file
+USER_FILE = "users.json"
+ADMIN_EMAIL = "dkmurugesan12321@gmail.com"
+EMAIL_PASSWORD = "blsh jgbm bezo mhgz"
+
+logged_in = False  # Track login status
+
+def load_users():
+    if os.path.exists(USER_FILE):
+        with open(USER_FILE, "r") as file:
+            return json.load(file)
+    return {}
+
+def save_users(users):
+    with open(USER_FILE, "w") as file:
+        json.dump(users, file, indent=4)
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def send_email(subject, body, receiver_email):
+    message = f"Subject: {subject}\n\n{body}"
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(ADMIN_EMAIL, EMAIL_PASSWORD)
+            server.sendmail(ADMIN_EMAIL, receiver_email, message)
+    except Exception as e:
+        print(f"Email sending failed: {e}")
+
+def generate_temp_password():
+    return str(random.randint(100000, 999999))
+
+def request_action(action):
+    if not logged_in:
+        messagebox.showerror("Error", "Please log in first!")
+        return
+    
+    user_email = simpledialog.askstring("Request", "Enter your email:")
+    if not user_email:
+        messagebox.showerror("Error", "Email is required!")
+        return
+    
+    users = load_users()
+    if user_email not in [users[user]["email"] for user in users]:
+        messagebox.showerror("Error", "Email not found!")
+        return
+    
+    temp_password = generate_temp_password()
+    messagebox.showinfo("Admin Approval", f"Request sent to admin. Wait for the admin's response.")
+    send_email(f"{action.capitalize()} Request", f"User {user_email} requested {action}.\nVerification Code: {temp_password}", ADMIN_EMAIL)
+    
+    entered_password = simpledialog.askstring("Verification", "Enter the password received from the admin:", show='*')
+    if entered_password == temp_password:
+        messagebox.showinfo("Success", f"{action.capitalize()} Approved!")
+    else:
+        messagebox.showerror("Error", "Incorrect Password!")
+
+def forgot_password():
+    users = load_users()
+    
+    username = simpledialog.askstring("Forgot Password", "Enter your username:")
+    
+    if username not in users:
+        messagebox.showerror("Error", "Username not found!")
+        return
+    
+    new_password = simpledialog.askstring("Forgot Password", "Enter a new password:", show="*")
+    confirm_password = simpledialog.askstring("Forgot Password", "Confirm new password:", show="*")
+    
+    if new_password != confirm_password:
+        messagebox.showerror("Error", "Passwords do not match!")
+        return
+
+    # Update the user's password
+    users[username]["password"] = hash_password(new_password)
+    save_users(users)  # Save the updated password
+    messagebox.showinfo("Success", "Password has been reset successfully!")
+
+    
+def enable_usb():
+    request_action("Enable USB")
+    os.system("reg add HKLM\\SYSTEM\\CurrentControlSet\\Services\\USBSTOR /v Start /t REG_DWORD /d 3 /f")
+    messagebox.showinfo("USB", "✅ USB Enabled!")
+
+def disable_usb():
+    request_action("Disable USB")
+    os.system("reg add HKLM\\SYSTEM\\CurrentControlSet\\Services\\USBSTOR /v Start /t REG_DWORD /d 4 /f")
+    messagebox.showinfo("USB", "✅ USB disabled!")
+
+def open_help():
+    webbrowser.open("help.html")
+def open_info():
+    webbrowser.open("info.html")
+
+def recognize_speech():
+    if not logged_in:
+        messagebox.showerror("Error", "Please log in first!")
+        return
+    
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        messagebox.showinfo("Speech Recognition", "Say 'Enable USB', 'Disable USB'")
+        try:
+            audio = recognizer.listen(source)
+            command = recognizer.recognize_google(audio).lower()
+            if "enable usb" in command:
+                enable_usb()
+            elif "disable usb" in command:
+                disable_usb()
+           
+            else:
+                messagebox.showerror("Error", "Unknown Command")
+        except sr.UnknownValueError:
+            messagebox.showerror("Error", "Could not understand audio")
+        except sr.RequestError:
+            messagebox.showerror("Error", "Speech service unavailable")
+
+def register_user():
+    users = load_users()
+    register_window = tk.Toplevel(root)
+    register_window.title("Register")
+    register_window.configure(bg="#1e1e2e")
+
+    tk.Label(register_window, text="Username:", fg="white", bg="#1e1e2e").pack()
+    username_entry = tk.Entry(register_window)
+    username_entry.pack()
+    
+    tk.Label(register_window, text="Email:", fg="white", bg="#1e1e2e").pack()
+    email_entry = tk.Entry(register_window)
+    email_entry.pack()
+    
+    tk.Label(register_window, text="Password:", fg="white", bg="#1e1e2e").pack()
+    password_entry = tk.Entry(register_window, show='*')
+    password_entry.pack()
+    
+    def submit_registration():
+        username = username_entry.get()
+        email = email_entry.get()
+        password = password_entry.get()
+        
+        if not username or not email or not password:
+            messagebox.showerror("Error", "All fields are required!")
+            return
+        
+        if username in users:
+            messagebox.showerror("Error", "Username already exists!")
+            return
+        
+        users[username] = {"email": email, "password": hash_password(password)}
+        save_users(users)
+        send_email("Registration Successful", f"Welcome {username}! You are now registered.", email)
+        messagebox.showinfo("Success", "Registration complete! Check your email.")
+        register_window.destroy()
+
+    ttk.Button(register_window, text="Register", command=submit_registration).pack(pady=10)
+
+def login_user():
+    global logged_in
+    users = load_users()
+    username = simpledialog.askstring("Login", "Enter your username:")
+    password = simpledialog.askstring("Login", "Enter your password:", show='*')
+    if username in users and str(users[username]["password"]) == hash_password(password):
+        logged_in = True
+        messagebox.showinfo("Success", "Login Successful!")
+        update_buttons()
+    else:
+        messagebox.showerror("Error", "Invalid Credentials! Please re-enter.")
+
+def update_buttons():
+    if logged_in:
+        enable_usb_btn.pack(pady=5)
+        disable_usb_btn.pack(pady=5)
+        voice_cmd_btn.pack(pady=5)
+    else:
+        enable_usb_btn.pack_forget()
+        disable_usb_btn.pack_forget()
+        voice_cmd_btn.pack_forget()
+
+def launch_app():
+    global root, enable_usb_btn, disable_usb_btn, voice_cmd_btn
+    root = tk.Tk()
+    root.title("USB Control")
+    root.configure(bg="black")
+    
+    if os.path.exists("image.png"):
+        bg_image = Image.open("image.png").resize((400, 500), Image.LANCZOS)
+        bg_photo = ImageTk.PhotoImage(bg_image)
+        tk.Label(root, image=bg_photo).place(relwidth=1, relheight=1)
+
+    tk.Label(root, text="USB & Physical security", font=("Arial", 16, "bold"), fg="green", bg="black").pack(pady=10)
+    
+    style = ttk.Style()
+    style.configure("TButton", font=("Arial", 12, "bold"), padding=5)
+  
+    
+    ttk.Button(root, text="INFO", command=open_info).pack(pady=5)
+    ttk.Button(root, text="Register", command=register_user).pack(pady=5)
+    ttk.Button(root, text="Login", command=login_user).pack(pady=5)
+    enable_usb_btn = ttk.Button(root, text="Enable USB", command=enable_usb)
+    disable_usb_btn = ttk.Button(root, text="Disable USB", command=disable_usb)
+    voice_cmd_btn = ttk.Button(root, text="Voice Command", command=recognize_speech)
+    ttk.Button(root, text="Forgot Password", command=forgot_password).pack(pady=5)
+    ttk.Button(root, text="Help", command=open_help).pack(pady=5)
+    
+    update_buttons()
+    root.mainloop()
+
+launch_app()
+
+if __name__ == "__main__":
+    launch_app
